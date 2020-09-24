@@ -1,0 +1,18 @@
+{
+    "live": "true",
+    "notificationItems": [{
+        "NotificationRequestItem": {
+            "amount": {
+                "currency": "EUR",
+                "value": 0
+            },
+            "eventCode": "REPORT_AVAILABLE",
+            "eventDate": "2020-09-18T12:43:36+02:00",
+            "merchantAccountCode": "MocoMuseumOnlinetickets",
+            "merchantReference": "testMerchantRef1",
+            "pspReference": "test_REPORT_AVAILABLE.csv",
+            "reason": "https://www.dropbox.com/s/jx0gj87ei8hbuui/adyen_dummy.csv",
+            "success": "true"
+        }
+    }]
+}
