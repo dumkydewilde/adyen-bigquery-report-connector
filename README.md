@@ -20,10 +20,10 @@ The following is an example of a webhook sent by Adyen as a POST request. Import
             },
             "eventCode": "REPORT_AVAILABLE",
             "eventDate": "2020-09-18T12:43:36+02:00",
-            "merchantAccountCode": "MocoMuseumOnlinetickets",
+            "merchantAccountCode": "yourAccountCode",
             "merchantReference": "testMerchantRef1",
             "pspReference": "test_REPORT_AVAILABLE.csv",
-            "reason": "https://www.dropbox.com/s/jx0gj87ei8hbuui/adyen_dummy.csv",
+            "reason": "https://URL-to-the-report-as.csv",
             "success": "true"
         }
     }]
