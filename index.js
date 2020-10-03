@@ -2,7 +2,7 @@
  * Parses the notification webhook from Adyen (basic auth) and stores the file in a GCP bucket
  * ENV: DOMAIN (default: https://out.adyen.com)
  * ENV: STORAGE_BUCKET
- * ENV: USERNAME
+ * ENV: REPORT_USER
  * ENG: PASSWORD
  *
  * @param {Object} req Cloud Function request context.
@@ -13,11 +13,19 @@ exports.processAdyenRequest = (req, res) => {
     const fs = require('fs');
     const https = require('https');
 
+    const STORAGE_BUCKET = process.env.STORAGE_BUCKET || "etl-adyen";
+
     // Set CORS headers for preflight requests, allows POSTS from DOMAIN or adyen.com for default
     res.set('Access-Control-Allow-Origin', process.env.DOMAIN || "https://out.adyen.com");
 
+    const httpConfig = {
+        headers: { 'Authorization': 'Basic ' + Buffer.from(process.env.REPORT_USER + ':' + process.env.PASSWORD).toString('base64') }
+    };
+
     if (req.method === 'POST') {
         const data = req.body;
+        console.log("Incoming notification: " + JSON.stringify(data));
+
         data.notificationItems.map(async(i) => {
             if (Object.keys(i).indexOf("NotificationRequestItem") == -1) {
                 return
@@ -25,25 +33,38 @@ exports.processAdyenRequest = (req, res) => {
                 i = i.NotificationRequestItem
             }
 
-            if (i.eventCode === "REPORT_AVAILABLE") {
+            if (i.eventCode === "REPORT_AVAILABLE" && i.pspReference.indexOf("received_payments_report") > -1) {
                 try {
+                    console.log("Downloading file: " + i.pspReference);
+
                     const filename = i.pspReference;
                     const file = fs.createWriteStream(`/tmp/${filename}`);
 
-                    const headers = {
-                        "Authorization": "Basic " + Buffer.from(`${process.env.USERNAME}:${process.env.PASSWORD}`.toString('base64'))
-                    };
-                    https.get(i.reason, res => {
-                        res.pipe(file);
-                    }, headers);
+                    await https.get(i.reason, httpConfig, response => {
+                        console.log(`Fetched url ${i.reason} with response '${response.statusCode} ${response.statusMessage}'`);
 
-                    const storage = new Storage();
-                    storage.bucket(process.env.STORAGE_BUCKET).upload(`/tmp/${filename}`, {
-                        gzip: true,
-                        metadata: {
-                            cacheControl: 'no-cache',
-                        },
-                    });
+                        response.pipe(file);
+
+                        file.on('finish', function() {
+                            file.close((err) => {
+                                if (err)
+                                    console.error('Failed to close file: ' + err);
+                                else {
+                                    console.log(`File ${i.reason} saved successfully`);
+
+                                    console.log(`Uploading file: ${i.pspReference} to storage bucket ${STORAGE_BUCKET}`);
+                                    const storage = new Storage();
+                                    storage.bucket(STORAGE_BUCKET).upload(`/tmp/${filename}`, {
+                                        metadata: {
+                                            cacheControl: 'no-cache',
+                                        },
+                                    });
+                                }
+                            });
+                        });
+                    }).on('error', err => {
+                        throw err
+                    })
                 } catch (e) {
                     console.error(e)
                     res.status(400).send("Error downloading from URL")
@@ -52,7 +73,7 @@ exports.processAdyenRequest = (req, res) => {
         });
         res.status(200).send("[accepted]");
     } else {
-        res.status(500).send("Invalid request method")
+        res.status(400).send("Invalid request method")
     }
 }
 
@@ -69,7 +90,11 @@ exports.parseCSV = async(fileEvent, context) => {
     const { Storage } = require('@google-cloud/storage');
     const csv = require('csv');
 
+    const STORAGE_BUCKET_PROCESSED = process.env.STORAGE_BUCKET_PROCESSED || "etl-adyen-processed"
+
     const storage = new Storage();
+
+    console.log(`Processing file '${fileEvent.name}' from bucket '${fileEvent.bucket}'`);
 
     await storage.bucket(fileEvent.bucket).file(fileEvent.name).createReadStream()
         .pipe(csv.parse({ delimiter: ',', columns: true }))
@@ -132,15 +157,21 @@ exports.parseCSV = async(fileEvent, context) => {
         }))
         .pipe(csv.stringify({ header: true }))
         .pipe(storage
-            .bucket(process.env.STORAGE_BUCKET_PROCESSED)
+            .bucket(STORAGE_BUCKET_PROCESSED)
             .file(fileEvent.name)
             .createWriteStream()) // Store processed file in new bucket
         .on('finish', () => {
-            // Delete the file if it's been succesfully processed
+            /*
+            Optionally delete the file if it's been succesfully processed
             storage.bucket(fileEvent.bucket).file(fileEvent.name).delete().then((data) => {
-                console.log(`Processed and deleted file: "${fileEvent.name}" with response: ${data[0]}`);
+                const response = JSON.stringify(data[0]);
+                console.log(`Processed and deleted file: "${fileEvent.name}" with response: ${JSON.stringify(response)}`);
+                
             })
-        }).on('error', (err) => {
+            */
+            console.log(`Finished processing: "${fileEvent.name}"`);
+        })
+        .on('error', (err) => {
             console.log(err);
         });
 }
@@ -181,8 +212,9 @@ exports.CSVToBigQuery = async(fileEvent, context) => {
                 { name: 'Shopper_Country', type: 'STRING' }
             ],
         },
-        fieldDelimiter: ",",
+        fieldDelimiter: ',',
         writeDisposition: 'WRITE_APPEND',
+        createDisposition: 'CREATE_IF_NEEDED'
     };
 
     // Load data from a Google Cloud Storage file into the table
@@ -199,7 +231,7 @@ exports.CSVToBigQuery = async(fileEvent, context) => {
     if (errors && errors.length > 0) {
         throw errors;
     } else {
-        // If no errors, delete the file from storage
-        storage.bucket(fileEvent.bucket).file(fileEvent.name).delete();
+        // If no errors, optionally delete the file from storage
+        // storage.bucket(fileEvent.bucket).file(fileEvent.name).delete();
     }
 }
